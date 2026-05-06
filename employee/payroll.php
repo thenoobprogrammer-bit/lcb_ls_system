@@ -17,7 +17,7 @@ require BASE_PATH . '/partials/layout_top.php';
             <tbody>
             <?php foreach ($payrolls as $row): ?>
                 <tr>
-                    <td><?= e($row['payroll_period_start']) ?> to <?= e($row['payroll_period_end']) ?></td>
+                    <td><?= e(format_display_date($row['payroll_period_start'])) ?> to <?= e(format_display_date($row['payroll_period_end'])) ?></td>
                     <td><?= e(money((float) $row['basic_salary'])) ?></td>
                     <td><?= e(money((float) $row['allowance'])) ?></td>
                     <td><?= e(money((float) $row['deductions'])) ?></td>

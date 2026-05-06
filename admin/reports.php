@@ -64,7 +64,7 @@ require BASE_PATH . '/partials/layout_top.php';
                     <tr>
                         <td><?= e($invoice['invoice_number']) ?></td>
                         <td><?= e($invoice['payment_status']) ?></td>
-                        <td><?= e($invoice['created_at']) ?></td>
+                        <td><?= e(format_display_datetime($invoice['created_at'])) ?></td>
                         <td><a class="btn btn-sm btn-outline-secondary" href="<?= e(app_url('admin/invoice.php?id=' . (int) $invoice['id'])) ?>" target="_blank">Open</a></td>
                     </tr>
                 <?php endforeach; ?>

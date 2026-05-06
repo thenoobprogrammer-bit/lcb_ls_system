@@ -17,7 +17,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $packageId = post_int('package_id');
             $package = fetch_one('SELECT * FROM packages WHERE id = ?', 'i', [$packageId]);
-            if (!$package || !package_items_available($package['equipment_ids'])) {
+            $packageItems = $package ? decode_package_items($package['package_items_json'] ?? null, $package['equipment_ids'] ?? null) : [];
+            if (!$package || !package_items_available($packageItems)) {
                 throw new RuntimeException('Selected package is not currently available.');
             }
             if (event_has_conflict($packageId, post_string('event_date'), post_string('start_time'), post_string('end_time'))) {
@@ -87,7 +88,7 @@ require BASE_PATH . '/partials/layout_top.php';
                         <tr>
                             <td><?= e($event['event_name']) ?><div class="small text-muted"><?= e($event['event_type']) ?></div></td>
                             <td><?= e($event['package_name'] ?? '-') ?></td>
-                            <td><?= e($event['event_date']) ?><div class="small text-muted"><?= e(substr($event['start_time'], 0, 5)) ?> - <?= e(substr($event['end_time'], 0, 5)) ?></div></td>
+                            <td><?= e(format_display_date($event['event_date'])) ?><div class="small text-muted"><?= e(format_display_time($event['start_time'])) ?> - <?= e(format_display_time($event['end_time'])) ?></div></td>
                             <td><span class="status-pill status-<?= strtolower($event['event_status']) ?>"><?= e($event['event_status']) ?></span></td>
                             <td><?= $event['attachment_filename'] ? '<a href="' . e(app_url('uploads/events/' . $event['attachment_filename'])) . '" target="_blank">Open</a>' : 'None' ?></td>
                             <td>

@@ -49,7 +49,7 @@ if (!$payment) {
                     <div class="col-md-6">
                         <h5>Event Details</h5>
                         <div><?= e($payment['event_name']) ?> (<?= e($payment['event_type']) ?>)</div>
-                        <div><?= e($payment['event_date']) ?></div>
+                        <div><?= e(format_display_date($payment['event_date'])) ?></div>
                         <div><?= e($payment['package_name'] ?? 'Custom Package') ?></div>
                     </div>
                 </div>
@@ -74,4 +74,3 @@ if (!$payment) {
     </div>
 </body>
 </html>
-

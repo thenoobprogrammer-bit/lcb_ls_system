@@ -42,7 +42,7 @@ require BASE_PATH . '/partials/layout_top.php';
                     <td><?= e($message['subject']) ?></td>
                     <td><?= e($message['message_body']) ?></td>
                     <td><?= e($message['admin_reply'] ?: 'No reply yet') ?></td>
-                    <td><?= e($message['created_at']) ?></td>
+                    <td><?= e(format_display_datetime($message['created_at'])) ?></td>
                     <td><button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#reply<?= (int) $message['id'] ?>">Reply</button></td>
                 </tr>
             <?php endforeach; ?>
@@ -66,4 +66,3 @@ require BASE_PATH . '/partials/layout_top.php';
 </div>
 <?php endforeach; ?>
 <?php require BASE_PATH . '/partials/layout_bottom.php'; ?>
-

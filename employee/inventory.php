@@ -5,22 +5,32 @@ require_once dirname(__DIR__) . '/config/app.php';
 require_auth([ACCOUNT_EMPLOYEE]);
 
 $userId = (int) current_user()['id'];
+$categories = fetch_inventory_categories();
+$wireOptions = wire_length_options();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         $action = post_string('action');
         if ($action === 'add') {
             $imageFilename = upload_image($_FILES['image'] ?? [], 'inventory');
-            $stmt = db()->prepare('INSERT INTO inventory_items (item_name, category, description, quantity, unit_price, status, image_filename, last_maintenance_date, maintenance_notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            $category = find_inventory_category(post_int('category_id'));
+            if (!$category) {
+                throw new RuntimeException('Selected category was not found.');
+            }
+            $stmt = db()->prepare('INSERT INTO inventory_items (item_name, category_id, category, wire_length_label, description, quantity, unit_price, status, image_filename, last_maintenance_date, maintenance_notes, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
             $itemName = post_string('item_name');
-            $category = post_string('category');
+            $categoryName = (string) $category['category_name'];
+            $categoryId = (int) $category['id'];
+            $wireLength = category_allows_wire_length($category)
+                ? normalize_wire_length_value('Wires', post_string('wire_length_preset'), post_string('wire_length_custom'))
+                : null;
             $description = post_string('description');
             $quantity = post_int('quantity');
             $unitPrice = post_float('unit_price');
             $status = post_string('status');
             $maintenanceDate = post_string('last_maintenance_date') ?: null;
             $maintenanceNotes = post_string('maintenance_notes');
-            $stmt->bind_param('sssidssssi', $itemName, $category, $description, $quantity, $unitPrice, $status, $imageFilename, $maintenanceDate, $maintenanceNotes, $userId);
+            $stmt->bind_param('sisssidssssi', $itemName, $categoryId, $categoryName, $wireLength, $description, $quantity, $unitPrice, $status, $imageFilename, $maintenanceDate, $maintenanceNotes, $userId);
             $stmt->execute();
             log_activity($userId, 'Add Item', 'Inventory', "Employee added inventory item {$itemName}.");
             set_flash('success', 'Inventory item added.');
@@ -28,20 +38,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($action === 'edit') {
             $id = post_int('id');
             $current = fetch_one('SELECT * FROM inventory_items WHERE id = ?', 'i', [$id]);
+            if (!$current) {
+                throw new RuntimeException('Inventory item not found.');
+            }
             $imageFilename = $current['image_filename'];
             if (!empty($_FILES['image']['name'])) {
                 $imageFilename = upload_image($_FILES['image'], 'inventory');
             }
-            $stmt = db()->prepare('UPDATE inventory_items SET item_name = ?, category = ?, description = ?, quantity = ?, unit_price = ?, status = ?, image_filename = ?, last_maintenance_date = ?, maintenance_notes = ? WHERE id = ?');
+            $category = find_inventory_category(post_int('category_id'));
+            if (!$category) {
+                throw new RuntimeException('Selected category was not found.');
+            }
+            $stmt = db()->prepare('UPDATE inventory_items SET item_name = ?, category_id = ?, category = ?, wire_length_label = ?, description = ?, quantity = ?, unit_price = ?, status = ?, image_filename = ?, last_maintenance_date = ?, maintenance_notes = ? WHERE id = ?');
             $itemName = post_string('item_name');
-            $category = post_string('category');
+            $categoryName = (string) $category['category_name'];
+            $categoryId = (int) $category['id'];
+            $wireLength = category_allows_wire_length($category)
+                ? normalize_wire_length_value('Wires', post_string('wire_length_preset'), post_string('wire_length_custom'))
+                : null;
             $description = post_string('description');
             $quantity = post_int('quantity');
             $unitPrice = post_float('unit_price');
             $status = post_string('status');
             $maintenanceDate = post_string('last_maintenance_date') ?: null;
             $maintenanceNotes = post_string('maintenance_notes');
-            $stmt->bind_param('sssidssssi', $itemName, $category, $description, $quantity, $unitPrice, $status, $imageFilename, $maintenanceDate, $maintenanceNotes, $id);
+            $stmt->bind_param('sisssidssssi', $itemName, $categoryId, $categoryName, $wireLength, $description, $quantity, $unitPrice, $status, $imageFilename, $maintenanceDate, $maintenanceNotes, $id);
             $stmt->execute();
             log_activity($userId, 'Update Item', 'Inventory', "Employee updated inventory item {$itemName}.");
             set_flash('success', 'Inventory item updated.');
@@ -52,7 +73,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     redirect('employee/inventory.php');
 }
 
-$items = fetch_all('SELECT * FROM inventory_items ORDER BY id DESC');
+$items = fetch_all('
+    SELECT i.*, c.category_name AS category_label, c.allows_wire_length
+    FROM inventory_items i
+    LEFT JOIN inventory_categories c ON c.id = i.category_id
+    ORDER BY i.id DESC
+');
 $pageTitle = 'Inventory';
 $pageKey = 'employee-inventory';
 require BASE_PATH . '/partials/layout_top.php';
@@ -69,8 +95,8 @@ require BASE_PATH . '/partials/layout_top.php';
             <?php foreach ($items as $item): ?>
                 <tr>
                     <td><img class="table-thumb" src="<?= e(inventory_image($item['image_filename'])) ?>" alt=""></td>
-                    <td><?= e($item['item_name']) ?></td>
-                    <td><?= e($item['category']) ?></td>
+                    <td><?= e(inventory_display_name($item)) ?></td>
+                    <td><?= e($item['category_label'] ?? $item['category']) ?></td>
                     <td><?= e((string) $item['quantity']) ?></td>
                     <td><span class="status-pill status-<?= strtolower(str_replace(' ', '-', $item['status'])) ?>"><?= e($item['status']) ?></span></td>
                     <td class="d-flex gap-2">
@@ -90,7 +116,13 @@ require BASE_PATH . '/partials/layout_top.php';
         <div class="modal-header"><h5 class="modal-title">Add Inventory Item</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body row g-3">
             <div class="col-md-6"><label class="form-label">Item Name</label><input class="form-control" name="item_name" required></div>
-            <div class="col-md-6"><label class="form-label">Category</label><input class="form-control" name="category" required></div>
+            <div class="col-md-6"><label class="form-label">Category</label><select class="form-select" name="category_id" data-wire-category="employeeAddWireFields" required><?php foreach ($categories as $category): ?><option value="<?= (int) $category['id'] ?>" data-allows-wire-length="<?= (int) $category['allows_wire_length'] ?>"><?= e($category['category_name']) ?></option><?php endforeach; ?></select></div>
+            <div class="col-12 d-none" id="employeeAddWireFields">
+                <div class="row g-3">
+                    <div class="col-md-6"><label class="form-label">Wire Length Preset</label><select class="form-select" name="wire_length_preset"><option value="">Choose preset</option><?php foreach ($wireOptions as $wireOption): ?><option value="<?= e($wireOption) ?>"><?= e($wireOption) ?></option><?php endforeach; ?></select></div>
+                    <div class="col-md-6"><label class="form-label">Custom Wire Length</label><input class="form-control" name="wire_length_custom" placeholder="Example: 7 meters"></div>
+                </div>
+            </div>
             <div class="col-md-4"><label class="form-label">Quantity</label><input type="number" class="form-control" name="quantity" min="0" required></div>
             <div class="col-md-4"><label class="form-label">Unit Price</label><input type="number" step="0.01" class="form-control" name="unit_price" min="0" required></div>
             <div class="col-md-4"><label class="form-label">Status</label><select class="form-select" name="status"><option>Available</option><option>In Use</option><option>Maintenance</option><option>Damaged</option></select></div>
@@ -105,7 +137,7 @@ require BASE_PATH . '/partials/layout_top.php';
 
 <?php foreach ($items as $item): ?>
 <div class="modal fade" id="viewItem<?= (int) $item['id'] ?>" tabindex="-1">
-    <div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">View Item</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><img class="img-fluid rounded-4 mb-3" src="<?= e(inventory_image($item['image_filename'])) ?>" alt=""><div><strong><?= e($item['item_name']) ?></strong></div><div><?= e($item['description']) ?></div></div></div></div>
+    <div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h5 class="modal-title">View Item</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><img class="img-fluid rounded-4 mb-3" src="<?= e(inventory_image($item['image_filename'])) ?>" alt=""><div class="fw-semibold"><?= e(inventory_display_name($item)) ?></div><div><?= e($item['description']) ?></div><div class="small text-muted mt-2">Last maintenance: <?= e(format_display_date($item['last_maintenance_date'])) ?></div></div></div></div>
 </div>
 <div class="modal fade" id="editItem<?= (int) $item['id'] ?>" tabindex="-1">
     <div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" enctype="multipart/form-data">
@@ -113,7 +145,13 @@ require BASE_PATH . '/partials/layout_top.php';
         <div class="modal-header"><h5 class="modal-title">Edit Item</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body row g-3">
             <div class="col-md-6"><label class="form-label">Item Name</label><input class="form-control" name="item_name" value="<?= e($item['item_name']) ?>" required></div>
-            <div class="col-md-6"><label class="form-label">Category</label><input class="form-control" name="category" value="<?= e($item['category']) ?>" required></div>
+            <div class="col-md-6"><label class="form-label">Category</label><select class="form-select" name="category_id" data-wire-category="employeeEditWireFields<?= (int) $item['id'] ?>" required><?php foreach ($categories as $category): ?><option value="<?= (int) $category['id'] ?>" data-allows-wire-length="<?= (int) $category['allows_wire_length'] ?>" <?= (int) $item['category_id'] === (int) $category['id'] ? 'selected' : '' ?>><?= e($category['category_name']) ?></option><?php endforeach; ?></select></div>
+            <div class="col-12 <?= ((int) ($item['allows_wire_length'] ?? 0) === 1 || inventory_uses_wire_length($item['category'])) ? '' : 'd-none' ?>" id="employeeEditWireFields<?= (int) $item['id'] ?>">
+                <div class="row g-3">
+                    <div class="col-md-6"><label class="form-label">Wire Length Preset</label><select class="form-select" name="wire_length_preset"><option value="">Choose preset</option><?php foreach ($wireOptions as $wireOption): ?><option value="<?= e($wireOption) ?>" <?= ($item['wire_length_label'] ?? '') === $wireOption ? 'selected' : '' ?>><?= e($wireOption) ?></option><?php endforeach; ?></select></div>
+                    <div class="col-md-6"><label class="form-label">Custom Wire Length</label><input class="form-control" name="wire_length_custom" value="<?= !in_array(($item['wire_length_label'] ?? ''), $wireOptions, true) ? e((string) $item['wire_length_label']) : '' ?>" placeholder="Example: 7 meters"></div>
+                </div>
+            </div>
             <div class="col-md-4"><label class="form-label">Quantity</label><input type="number" class="form-control" name="quantity" value="<?= (int) $item['quantity'] ?>" min="0" required></div>
             <div class="col-md-4"><label class="form-label">Unit Price</label><input type="number" step="0.01" class="form-control" name="unit_price" value="<?= e($item['unit_price']) ?>" min="0" required></div>
             <div class="col-md-4"><label class="form-label">Status</label><select class="form-select" name="status"><?php foreach (['Available','In Use','Maintenance','Damaged'] as $status): ?><option value="<?= e($status) ?>" <?= $item['status'] === $status ? 'selected' : '' ?>><?= e($status) ?></option><?php endforeach; ?></select></div>
@@ -127,4 +165,3 @@ require BASE_PATH . '/partials/layout_top.php';
 </div>
 <?php endforeach; ?>
 <?php require BASE_PATH . '/partials/layout_bottom.php'; ?>
-

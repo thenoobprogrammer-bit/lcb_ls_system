@@ -11,6 +11,28 @@ $(function () {
         const events = JSON.parse(this.dataset.events || '[]');
         renderCalendar(this, events);
     });
+
+    document.querySelectorAll('[data-wire-category]').forEach((select) => {
+        const syncWireFields = () => {
+            const targetId = select.dataset.wireCategory;
+            const wrapper = document.getElementById(targetId);
+            if (!wrapper) {
+                return;
+            }
+
+            const selectedOption = select.options[select.selectedIndex];
+            const allowsWireLength = selectedOption?.dataset.allowsWireLength === '1';
+            wrapper.classList.toggle('d-none', !allowsWireLength);
+            wrapper.querySelectorAll('input, select').forEach((field) => {
+                if (!allowsWireLength && field.matches('input')) {
+                    field.value = '';
+                }
+            });
+        };
+
+        syncWireFields();
+        select.addEventListener('change', syncWireFields);
+    });
 });
 
 function renderCalendar(container, events) {

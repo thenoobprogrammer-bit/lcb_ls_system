@@ -44,7 +44,7 @@ require BASE_PATH . '/partials/layout_top.php';
                         <tr>
                             <td><?= e($event['event_name']) ?></td>
                             <td><?= e($event['package_name'] ?? 'Custom Request') ?></td>
-                            <td><?= e($event['event_date']) ?> <?= e(substr($event['start_time'], 0, 5)) ?>-<?= e(substr($event['end_time'], 0, 5)) ?></td>
+                            <td><?= e(format_display_date($event['event_date'])) ?> <?= e(format_display_time($event['start_time'])) ?>-<?= e(format_display_time($event['end_time'])) ?></td>
                             <td><span class="status-pill status-<?= strtolower(str_replace(' ', '-', $event['event_status'])) ?>"><?= e($event['event_status']) ?></span></td>
                         </tr>
                     <?php endforeach; ?>

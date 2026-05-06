@@ -5,30 +5,37 @@ require_once dirname(__DIR__) . '/config/app.php';
 require_auth([ACCOUNT_ADMIN]);
 
 $userId = (int) current_user()['id'];
-$inventory = fetch_all('SELECT id, item_name, quantity, status FROM inventory_items ORDER BY item_name');
+$inventory = fetch_all('SELECT id, item_name, category, wire_length_label, quantity, status FROM inventory_items ORDER BY item_name');
+$inventoryById = [];
+foreach ($inventory as $item) {
+    $inventoryById[(int) $item['id']] = $item;
+}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         $action = post_string('action');
         if (in_array($action, ['add', 'edit'], true)) {
-            $equipmentIds = $_POST['equipment_ids'] ?? [];
-            $equipmentIds = array_map('intval', (array) $equipmentIds);
-            $equipmentSummary = [];
-            foreach ($inventory as $item) {
-                if (in_array((int) $item['id'], $equipmentIds, true)) {
-                    $equipmentSummary[] = $item['item_name'] . ' x' . $item['quantity'];
-                }
+            $packageItems = package_items_from_post(post_array('equipment_quantities'));
+            if (!$packageItems) {
+                throw new RuntimeException('Select at least one equipment item and enter its package quantity.');
             }
+            if (!package_items_available($packageItems)) {
+                throw new RuntimeException('Selected equipment exceeds available stock or includes unavailable inventory.');
+            }
+
+            $equipmentIds = array_map(static fn (array $row): int => (int) $row['inventory_id'], $packageItems);
             $idsString = implode(',', $equipmentIds);
-            $summaryString = implode(', ', $equipmentSummary);
+            $itemsJson = encode_package_items($packageItems);
+            $summaryString = package_items_summary($packageItems, $inventoryById);
+
             if ($action === 'add') {
-                $stmt = db()->prepare('INSERT INTO packages (package_name, description, equipment_ids, equipment_summary, price, availability_status, approval_status, submitted_by, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+                $stmt = db()->prepare('INSERT INTO packages (package_name, description, equipment_ids, package_items_json, equipment_summary, price, availability_status, approval_status, submitted_by, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
                 $packageName = post_string('package_name');
                 $description = post_string('description');
                 $price = post_float('price');
                 $availabilityStatus = post_string('availability_status');
                 $approvalStatus = post_string('approval_status');
-                $stmt->bind_param('ssssdssii', $packageName, $description, $idsString, $summaryString, $price, $availabilityStatus, $approvalStatus, $userId, $userId);
+                $stmt->bind_param('sssssdssii', $packageName, $description, $idsString, $itemsJson, $summaryString, $price, $availabilityStatus, $approvalStatus, $userId, $userId);
                 $stmt->execute();
                 log_activity($userId, 'Create Package', 'Packages', "Created package {$packageName}.");
                 set_flash('success', 'Package created.');
@@ -40,8 +47,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $price = post_float('price');
                 $availabilityStatus = post_string('availability_status');
                 $approvalStatus = post_string('approval_status');
-                $stmt = db()->prepare('UPDATE packages SET package_name = ?, description = ?, equipment_ids = ?, equipment_summary = ?, price = ?, availability_status = ?, approval_status = ?, approved_by = ? WHERE id = ?');
-                $stmt->bind_param('ssssdssii', $packageName, $description, $idsString, $summaryString, $price, $availabilityStatus, $approvalStatus, $userId, $id);
+                $stmt = db()->prepare('UPDATE packages SET package_name = ?, description = ?, equipment_ids = ?, package_items_json = ?, equipment_summary = ?, price = ?, availability_status = ?, approval_status = ?, approved_by = ? WHERE id = ?');
+                $stmt->bind_param('sssssdssii', $packageName, $description, $idsString, $itemsJson, $summaryString, $price, $availabilityStatus, $approvalStatus, $userId, $id);
                 $stmt->execute();
                 log_activity($userId, 'Update Package', 'Packages', "Updated package {$packageName}.");
                 set_flash('success', 'Package updated.');
@@ -63,6 +70,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $packages = fetch_all('SELECT p.*, u.full_name AS submitter_name FROM packages p LEFT JOIN users u ON u.id = p.submitted_by ORDER BY p.created_at DESC');
+$packageItemMap = [];
+foreach ($packages as $package) {
+    $packageItemMap[(int) $package['id']] = decode_package_items($package['package_items_json'] ?? null, $package['equipment_ids'] ?? null);
+}
+
 $pageTitle = 'Packages';
 $pageKey = 'admin-packages';
 require BASE_PATH . '/partials/layout_top.php';
@@ -106,12 +118,25 @@ require BASE_PATH . '/partials/layout_top.php';
             <div class="col-md-3"><label class="form-label">Availability</label><select class="form-select" name="availability_status"><option>Available</option><option>Unavailable</option></select></div>
             <div class="col-md-6"><label class="form-label">Approval</label><select class="form-select" name="approval_status"><option>Approved</option><option>Pending</option><option>Denied</option></select></div>
             <div class="col-12"><label class="form-label">Description</label><textarea class="form-control" name="description" rows="3"></textarea></div>
-            <div class="col-12"><label class="form-label">Included Equipment</label><div class="row g-2"><?php foreach ($inventory as $item): ?><div class="col-md-6"><div class="form-check border rounded-3 p-2"><input class="form-check-input" type="checkbox" name="equipment_ids[]" value="<?= (int) $item['id'] ?>" id="eqAdd<?= (int) $item['id'] ?>"><label class="form-check-label" for="eqAdd<?= (int) $item['id'] ?>"><?= e($item['item_name']) ?> (<?= e($item['status']) ?>)</label></div></div><?php endforeach; ?></div></div>
+            <div class="col-12">
+                <label class="form-label">Included Equipment</label>
+                <div class="row g-2">
+                    <?php foreach ($inventory as $item): $available = $item['status'] === 'Available' && (int) $item['quantity'] > 0; ?>
+                        <div class="col-md-6">
+                            <div class="package-equipment-card <?= $available ? '' : 'package-equipment-card-muted' ?>">
+                                <div class="fw-semibold"><?= e(inventory_display_name($item)) ?></div>
+                                <div class="small text-muted mb-2">Available stock: <?= e((string) $item['quantity']) ?> | Status: <?= e($item['status']) ?></div>
+                                <input type="number" class="form-control" name="equipment_quantities[<?= (int) $item['id'] ?>]" min="0" max="<?= (int) $item['quantity'] ?>" value="0" <?= $available ? '' : 'disabled' ?>>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
         </div>
         <div class="modal-footer"><button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Close</button><button class="btn btn-primary">Save Package</button></div>
     </form></div></div>
 </div>
-<?php foreach ($packages as $package): $selectedIds = array_map('intval', array_filter(explode(',', (string) $package['equipment_ids']))); ?>
+<?php foreach ($packages as $package): $selectedItems = $packageItemMap[(int) $package['id']] ?? []; $selectedQuantities = []; foreach ($selectedItems as $selectedItem) { $selectedQuantities[(int) $selectedItem['inventory_id']] = (int) $selectedItem['quantity']; } ?>
 <div class="modal fade" id="editPackage<?= (int) $package['id'] ?>" tabindex="-1">
     <div class="modal-dialog modal-lg"><div class="modal-content"><form method="post">
         <input type="hidden" name="action" value="edit"><input type="hidden" name="id" value="<?= (int) $package['id'] ?>">
@@ -122,7 +147,20 @@ require BASE_PATH . '/partials/layout_top.php';
             <div class="col-md-3"><label class="form-label">Availability</label><select class="form-select" name="availability_status"><?php foreach (['Available','Unavailable'] as $status): ?><option value="<?= e($status) ?>" <?= $package['availability_status'] === $status ? 'selected' : '' ?>><?= e($status) ?></option><?php endforeach; ?></select></div>
             <div class="col-md-6"><label class="form-label">Approval</label><select class="form-select" name="approval_status"><?php foreach (['Approved','Pending','Denied'] as $status): ?><option value="<?= e($status) ?>" <?= $package['approval_status'] === $status ? 'selected' : '' ?>><?= e($status) ?></option><?php endforeach; ?></select></div>
             <div class="col-12"><label class="form-label">Description</label><textarea class="form-control" name="description" rows="3"><?= e($package['description']) ?></textarea></div>
-            <div class="col-12"><label class="form-label">Included Equipment</label><div class="row g-2"><?php foreach ($inventory as $item): ?><div class="col-md-6"><div class="form-check border rounded-3 p-2"><input class="form-check-input" type="checkbox" name="equipment_ids[]" value="<?= (int) $item['id'] ?>" id="eq<?= (int) $package['id'] ?>_<?= (int) $item['id'] ?>" <?= in_array((int) $item['id'], $selectedIds, true) ? 'checked' : '' ?>><label class="form-check-label" for="eq<?= (int) $package['id'] ?>_<?= (int) $item['id'] ?>"><?= e($item['item_name']) ?></label></div></div><?php endforeach; ?></div></div>
+            <div class="col-12">
+                <label class="form-label">Included Equipment</label>
+                <div class="row g-2">
+                    <?php foreach ($inventory as $item): $selectedQuantity = $selectedQuantities[(int) $item['id']] ?? 0; $available = ($item['status'] === 'Available' && (int) $item['quantity'] > 0) || $selectedQuantity > 0; ?>
+                        <div class="col-md-6">
+                            <div class="package-equipment-card <?= $available ? '' : 'package-equipment-card-muted' ?>">
+                                <div class="fw-semibold"><?= e(inventory_display_name($item)) ?></div>
+                                <div class="small text-muted mb-2">Available stock: <?= e((string) $item['quantity']) ?> | Status: <?= e($item['status']) ?></div>
+                                <input type="number" class="form-control" name="equipment_quantities[<?= (int) $item['id'] ?>]" min="0" max="<?= max((int) $item['quantity'], $selectedQuantity) ?>" value="<?= $selectedQuantity ?>" <?= $available ? '' : 'disabled' ?>>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
         </div>
         <div class="modal-footer"><button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Close</button><button class="btn btn-primary">Update Package</button></div>
     </form></div></div>

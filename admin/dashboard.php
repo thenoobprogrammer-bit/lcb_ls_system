@@ -59,7 +59,7 @@ require BASE_PATH . '/partials/layout_top.php';
                             <td><?= e($log['action_name']) ?></td>
                             <td><?= e($log['module_name']) ?></td>
                             <td><?= e($log['details']) ?></td>
-                            <td><?= e($log['created_at']) ?></td>
+                            <td><?= e(format_display_datetime($log['created_at'])) ?></td>
                         </tr>
                     <?php endforeach; ?>
                     </tbody>

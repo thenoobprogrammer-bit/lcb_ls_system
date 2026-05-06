@@ -6,6 +6,8 @@ require_auth([ACCOUNT_ADMIN]);
 
 $userId = (int) current_user()['id'];
 $employees = fetch_all("SELECT id, full_name, employee_role FROM users WHERE account_type = 'employee' AND is_active = 1 ORDER BY full_name");
+$rentalUsers = fetch_all("SELECT id, full_name, contact_number FROM users WHERE account_type = 'rental' AND is_active = 1 ORDER BY full_name");
+$packages = fetch_all('SELECT * FROM packages WHERE approval_status = "Approved" AND availability_status = "Available" ORDER BY package_name');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $startedTransaction = false;
@@ -28,6 +30,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             log_activity($userId, ucfirst($action) . ' Event', 'Events', "Changed event ID {$id} to {$status}.");
             set_flash('success', "Event {$status}.");
         }
+        if ($action === 'create') {
+            $selectedEmployees = array_map('intval', post_array('employee_ids'));
+            $packageId = post_int('package_id');
+            $rentalUserId = post_int('rental_user_id');
+            if (!$rentalUserId) {
+                throw new RuntimeException('Select the customer for this event.');
+            }
+            $package = fetch_one('SELECT * FROM packages WHERE id = ?', 'i', [$packageId]);
+            if (!$package) {
+                throw new RuntimeException('Selected package was not found.');
+            }
+            $packageItems = decode_package_items($package['package_items_json'] ?? null, $package['equipment_ids'] ?? null);
+            if (!package_items_available($packageItems)) {
+                throw new RuntimeException('Selected package is not currently available.');
+            }
+            $eventDate = post_string('event_date');
+            $startTime = post_string('start_time');
+            $endTime = post_string('end_time');
+            if (event_has_conflict($packageId, $eventDate, $startTime, $endTime)) {
+                throw new RuntimeException('Schedule conflict detected for the selected package.');
+            }
+
+            db()->begin_transaction();
+            $startedTransaction = true;
+
+            $stmt = db()->prepare('INSERT INTO events (rental_user_id, package_id, event_name, event_type, event_date, start_time, end_time, address, full_name, contact_number, notes, event_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            $eventName = post_string('event_name');
+            $eventType = post_string('event_type');
+            $address = post_string('address');
+            $fullName = post_string('full_name');
+            $contactNumber = post_string('contact_number');
+            $notes = post_string('notes');
+            $approvedStatus = 'Approved';
+            $stmt->bind_param('iissssssssss', $rentalUserId, $packageId, $eventName, $eventType, $eventDate, $startTime, $endTime, $address, $fullName, $contactNumber, $notes, $approvedStatus);
+            $stmt->execute();
+            $eventId = (int) db()->insert_id;
+
+            if ($selectedEmployees) {
+                $insertStmt = db()->prepare('INSERT INTO event_assignments (event_id, employee_id, assigned_by) VALUES (?, ?, ?)');
+                foreach ($selectedEmployees as $employeeId) {
+                    $insertStmt->bind_param('iii', $eventId, $employeeId, $userId);
+                    $insertStmt->execute();
+                    create_notification($employeeId, 'Event assignment', "You have been assigned to {$eventName}.");
+                }
+            }
+
+            create_notification($rentalUserId, 'Event created', "{$eventName} has been created and approved.");
+            db()->commit();
+            $startedTransaction = false;
+            log_activity($userId, 'Create Event', 'Events', "Created approved event {$eventName}.");
+            set_flash('success', 'Event created and automatically approved.');
+        }
         if ($action === 'assign_team') {
             $event = fetch_one('SELECT id, event_name, event_status FROM events WHERE id = ?', 'i', [$id]);
             if (!$event) {
@@ -37,7 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new RuntimeException('Only approved events can have an assigned crew.');
             }
 
-            $selectedEmployees = array_map('intval', (array) ($_POST['employee_ids'] ?? []));
+            $selectedEmployees = array_map('intval', post_array('employee_ids'));
             db()->begin_transaction();
             $startedTransaction = true;
             $deleteStmt = db()->prepare('DELETE FROM event_assignments WHERE event_id = ?');
@@ -85,50 +139,71 @@ $pageTitle = 'Event Requests';
 $pageKey = 'admin-events';
 require BASE_PATH . '/partials/layout_top.php';
 ?>
-<div class="row g-4">
-    <div class="col-lg-8">
-        <div class="content-card">
-            <div class="section-title mb-3">Bookings and Event Requests</div>
-            <div class="table-responsive">
-                <table class="table datatable align-middle">
-                    <thead><tr><th>Event</th><th>Customer</th><th>Package</th><th>Schedule</th><th>Status</th><th>Assigned Crew</th><th>Attachment</th><th>Actions</th></tr></thead>
-                    <tbody>
-                    <?php foreach ($events as $event): ?>
-                        <tr>
-                            <td><div class="fw-semibold"><?= e($event['event_name']) ?></div><div class="small text-muted"><?= e($event['event_type']) ?></div></td>
-                            <td><?= e($event['customer_name']) ?><div class="small text-muted"><?= e($event['contact_number']) ?></div></td>
-                            <td><?= e($event['package_name'] ?? 'Custom') ?></td>
-                            <td><?= e($event['event_date']) ?><div class="small text-muted"><?= e(substr($event['start_time'], 0, 5)) ?> - <?= e(substr($event['end_time'], 0, 5)) ?></div></td>
-                            <td><span class="status-pill status-<?= strtolower($event['event_status']) ?>"><?= e($event['event_status']) ?></span></td>
-                            <td><?= e($event['assigned_employees'] ?: 'No crew assigned') ?></td>
-                            <td><?= $event['attachment_filename'] ? '<a href="' . e(app_url('uploads/events/' . $event['attachment_filename'])) . '" target="_blank">Open</a>' : 'None' ?></td>
-                            <td class="d-flex gap-2 flex-wrap">
-                                <?php if ($event['event_status'] !== 'Approved'): ?><form method="post"><input type="hidden" name="action" value="approve"><input type="hidden" name="id" value="<?= (int) $event['id'] ?>"><button class="btn btn-sm btn-outline-success">Approve</button></form><?php endif; ?>
-                                <?php if ($event['event_status'] !== 'Denied'): ?><form method="post"><input type="hidden" name="action" value="deny"><input type="hidden" name="id" value="<?= (int) $event['id'] ?>"><button class="btn btn-sm btn-outline-danger">Deny</button></form><?php endif; ?>
-                                <?php if ($event['event_status'] === 'Approved'): ?><button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#assignCrew<?= (int) $event['id'] ?>">Assign Crew</button><?php endif; ?>
-                                <?php if ($event['event_status'] === 'Approved'): ?><form method="post"><input type="hidden" name="action" value="complete"><input type="hidden" name="id" value="<?= (int) $event['id'] ?>"><button class="btn btn-sm btn-outline-primary">Complete</button></form><?php endif; ?>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
+<div class="content-card">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="section-title">Bookings and Event Requests</div>
+        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createEventModal">Create Event</button>
     </div>
-    <div class="col-lg-4">
-        <div class="calendar-card" data-calendar data-events='<?= e(json_encode(array_map(static fn ($row): array => [
-            'event_name' => $row['event_name'],
-            'event_date' => $row['event_date'],
-            'event_type' => $row['event_type'],
-            'start_time' => $row['start_time'],
-            'end_time' => $row['end_time'],
-            'event_status' => $row['event_status'],
-            'package_name' => $row['package_name'],
-            'customer_name' => $row['customer_name'],
-            'assigned_employees' => $row['assigned_employees'],
-        ], $events))) ?>'></div>
+    <div class="table-responsive">
+        <table class="table datatable align-middle">
+            <thead><tr><th>Event</th><th>Customer</th><th>Package</th><th>Schedule</th><th>Status</th><th>Assigned Crew</th><th>Attachment</th><th>Actions</th></tr></thead>
+            <tbody>
+            <?php foreach ($events as $event): ?>
+                <tr>
+                    <td><div class="fw-semibold"><?= e($event['event_name']) ?></div><div class="small text-muted"><?= e($event['event_type']) ?></div></td>
+                    <td><?= e($event['customer_name']) ?><div class="small text-muted"><?= e($event['contact_number']) ?></div></td>
+                    <td><?= e($event['package_name'] ?? 'Custom') ?></td>
+                    <td><?= e(format_display_date($event['event_date'])) ?><div class="small text-muted"><?= e(format_display_time($event['start_time'])) ?> - <?= e(format_display_time($event['end_time'])) ?></div></td>
+                    <td><span class="status-pill status-<?= strtolower($event['event_status']) ?>"><?= e($event['event_status']) ?></span></td>
+                    <td><?= e($event['assigned_employees'] ?: 'No crew assigned') ?></td>
+                    <td><?= $event['attachment_filename'] ? '<a href="' . e(app_url('uploads/events/' . $event['attachment_filename'])) . '" target="_blank">Open</a>' : 'None' ?></td>
+                    <td class="d-flex gap-2 flex-wrap">
+                        <?php if ($event['event_status'] !== 'Approved'): ?><form method="post"><input type="hidden" name="action" value="approve"><input type="hidden" name="id" value="<?= (int) $event['id'] ?>"><button class="btn btn-sm btn-outline-success">Approve</button></form><?php endif; ?>
+                        <?php if ($event['event_status'] !== 'Denied'): ?><form method="post"><input type="hidden" name="action" value="deny"><input type="hidden" name="id" value="<?= (int) $event['id'] ?>"><button class="btn btn-sm btn-outline-danger">Deny</button></form><?php endif; ?>
+                        <?php if ($event['event_status'] === 'Approved'): ?><button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#assignCrew<?= (int) $event['id'] ?>">Assign Crew</button><?php endif; ?>
+                        <?php if ($event['event_status'] === 'Approved'): ?><form method="post"><input type="hidden" name="action" value="complete"><input type="hidden" name="id" value="<?= (int) $event['id'] ?>"><button class="btn btn-sm btn-outline-primary">Complete</button></form><?php endif; ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
     </div>
 </div>
+
+<div class="calendar-card mt-4" data-calendar data-events='<?= e(json_encode(array_map(static fn ($row): array => [
+    'event_name' => $row['event_name'],
+    'event_date' => $row['event_date'],
+    'event_type' => $row['event_type'],
+    'start_time' => $row['start_time'],
+    'end_time' => $row['end_time'],
+    'event_status' => $row['event_status'],
+    'package_name' => $row['package_name'],
+    'customer_name' => $row['customer_name'],
+    'assigned_employees' => $row['assigned_employees'],
+], $events))) ?>'></div>
+
+<div class="modal fade" id="createEventModal" tabindex="-1">
+    <div class="modal-dialog modal-lg"><div class="modal-content"><form method="post">
+        <input type="hidden" name="action" value="create">
+        <div class="modal-header"><h5 class="modal-title">Create Event</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body row g-3">
+            <div class="col-md-6"><label class="form-label">Event Name</label><input class="form-control" name="event_name" required></div>
+            <div class="col-md-6"><label class="form-label">Event Type</label><input class="form-control" name="event_type" required></div>
+            <div class="col-md-6"><label class="form-label">Customer</label><select class="form-select" name="rental_user_id" required><?php foreach ($rentalUsers as $customer): ?><option value="<?= (int) $customer['id'] ?>"><?= e($customer['full_name']) ?></option><?php endforeach; ?></select></div>
+            <div class="col-md-6"><label class="form-label">Package</label><select class="form-select" name="package_id" required><?php foreach ($packages as $package): ?><option value="<?= (int) $package['id'] ?>"><?= e($package['package_name']) ?> - <?= e(money((float) $package['price'])) ?></option><?php endforeach; ?></select></div>
+            <div class="col-md-4"><label class="form-label">Event Date</label><input type="date" class="form-control" name="event_date" required></div>
+            <div class="col-md-4"><label class="form-label">Start Time</label><input type="time" class="form-control" name="start_time" required></div>
+            <div class="col-md-4"><label class="form-label">End Time</label><input type="time" class="form-control" name="end_time" required></div>
+            <div class="col-md-6"><label class="form-label">Customer Name</label><input class="form-control" name="full_name" required></div>
+            <div class="col-md-6"><label class="form-label">Contact Number</label><input class="form-control" name="contact_number" required></div>
+            <div class="col-12"><label class="form-label">Address</label><textarea class="form-control" name="address" rows="2" required></textarea></div>
+            <div class="col-12"><label class="form-label">Crew Members</label><div class="row g-2"><?php foreach ($employees as $employee): ?><div class="col-md-6"><div class="form-check border rounded-3 p-3"><input class="form-check-input" type="checkbox" name="employee_ids[]" value="<?= (int) $employee['id'] ?>" id="createEmployee<?= (int) $employee['id'] ?>"><label class="form-check-label" for="createEmployee<?= (int) $employee['id'] ?>"><?= e($employee['full_name']) ?> <span class="text-muted">- <?= e((string) $employee['employee_role']) ?></span></label></div></div><?php endforeach; ?></div></div>
+            <div class="col-12"><label class="form-label">Notes</label><textarea class="form-control" name="notes" rows="3"></textarea></div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button><button class="btn btn-primary">Create Approved Event</button></div>
+    </form></div></div>
+</div>
+
 <?php foreach ($events as $event): $selectedCrew = $assignmentMap[(int) $event['id']] ?? [];
     if ($event['event_status'] !== 'Approved') {
         continue;
@@ -145,7 +220,7 @@ require BASE_PATH . '/partials/layout_top.php';
                 <?php foreach ($employees as $employee): ?>
                     <div class="col-md-6">
                         <div class="form-check border rounded-3 p-3">
-                            <input class="form-check-input" type="checkbox" name="employee_ids[]" value="<?= (int) $employee['id'] ?>" id="event<?= (int) $event['id'] ?>employee<?= (int) $employee['id'] ?>" <?= in_array((string) $employee['id'], array_map('strval', $selectedCrew), true) ? 'checked' : '' ?>>
+                            <input class="form-check-input" type="checkbox" name="employee_ids[]" value="<?= (int) $employee['id'] ?>" id="event<?= (int) $event['id'] ?>employee<?= (int) $employee['id'] ?>" <?= in_array((int) $employee['id'], $selectedCrew, true) ? 'checked' : '' ?>>
                             <label class="form-check-label" for="event<?= (int) $event['id'] ?>employee<?= (int) $employee['id'] ?>">
                                 <?= e($employee['full_name']) ?>
                                 <span class="text-muted">- <?= e((string) $employee['employee_role']) ?></span>

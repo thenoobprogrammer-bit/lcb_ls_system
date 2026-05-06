@@ -165,11 +165,39 @@ body {
     border-radius: 999px;
 }
 
+.notification-button {
+    color: var(--text);
+}
+
+.notification-button:hover {
+    background: #f8fbff;
+}
+
 .user-chip img {
     width: 42px;
     height: 42px;
     border-radius: 14px;
     object-fit: cover;
+}
+
+.user-chip {
+    color: inherit;
+}
+
+.notification-entry {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: #f8fbff;
+}
+
+.notification-entry + .notification-entry {
+    margin-top: 12px;
+}
+
+.notification-entry-unread {
+    border-color: rgba(20, 93, 160, 0.28);
+    background: rgba(20, 93, 160, 0.08);
 }
 
 .stats-card,
@@ -344,6 +372,19 @@ body {
 .calendar-modal-meta {
     font-size: 0.92rem;
     color: var(--text);
+}
+
+.inventory-option-card,
+.package-equipment-card {
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 12px 14px;
+    background: #fff;
+}
+
+.package-equipment-card-muted {
+    opacity: 0.55;
+    background: #f3f6fa;
 }
 
 .container-fluid,

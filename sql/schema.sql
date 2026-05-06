@@ -15,10 +15,21 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE inventory_categories (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    category_name VARCHAR(100) NOT NULL UNIQUE,
+    allows_wire_length TINYINT(1) NOT NULL DEFAULT 0,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
 CREATE TABLE inventory_items (
     id INT AUTO_INCREMENT PRIMARY KEY,
     item_name VARCHAR(150) NOT NULL,
+    category_id INT NULL,
     category VARCHAR(100) NOT NULL,
+    wire_length_label VARCHAR(30) NULL,
     description TEXT NULL,
     quantity INT NOT NULL DEFAULT 0,
     unit_price DECIMAL(10,2) NOT NULL DEFAULT 0,
@@ -29,7 +40,8 @@ CREATE TABLE inventory_items (
     created_by INT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (category_id) REFERENCES inventory_categories(id) ON DELETE SET NULL
 );
 
 CREATE TABLE payrolls (
@@ -53,6 +65,7 @@ CREATE TABLE packages (
     package_name VARCHAR(150) NOT NULL,
     description TEXT NULL,
     equipment_ids TEXT NULL,
+    package_items_json LONGTEXT NULL,
     equipment_summary TEXT NULL,
     price DECIMAL(10,2) NOT NULL DEFAULT 0,
     availability_status ENUM('Available', 'Unavailable') NOT NULL DEFAULT 'Available',
@@ -160,11 +173,19 @@ VALUES
 ('soundtech', '$2y$10$rfvVjlwmq5d8czxjTj4AbuZUtGFd6eCzVGOnwGTrSYm1g7mM75l1y', 'employee', 'Marco Dela Cruz', 'Cebu City', '09170001111', 'Sound Technician'),
 ('rentaluser', '$2y$10$rfvVjlwmq5d8czxjTj4AbuZUtGFd6eCzVGOnwGTrSYm1g7mM75l1y', 'rental', 'Andrea Santos', 'Mandaue City', '09179990000', NULL);
 
-INSERT INTO inventory_items (item_name, category, description, quantity, unit_price, status, last_maintenance_date, maintenance_notes, created_by)
+INSERT INTO inventory_categories (category_name, allows_wire_length)
 VALUES
-('Line Array Speaker', 'Audio', 'Dual 12-inch professional speaker set', 8, 8500.00, 'Available', '2026-04-10', 'Cleaned and tested', 1),
-('Moving Head Light', 'Lighting', 'RGBW moving head fixture', 10, 6200.00, 'In Use', '2026-04-05', 'Used in April event', 1),
-('Wireless Microphone', 'Audio', 'Handheld microphone with receiver', 15, 2800.00, 'Available', '2026-04-12', 'Battery replaced', 1);
+('Speaker', 0),
+('Mixer', 0),
+('Lights', 0),
+('Lights Controller', 0),
+('Wires', 1);
+
+INSERT INTO inventory_items (item_name, category_id, category, description, quantity, unit_price, status, last_maintenance_date, maintenance_notes, created_by)
+VALUES
+( 'Line Array Speaker', 1, 'Speaker', 'Dual 12-inch professional speaker set', 8, 8500.00, 'Available', '2026-04-10', 'Cleaned and tested', 1),
+( 'Moving Head Light', 3, 'Lights', 'RGBW moving head fixture', 10, 6200.00, 'In Use', '2026-04-05', 'Used in April event', 1),
+( 'Wireless Microphone', 1, 'Speaker', 'Handheld microphone with receiver', 15, 2800.00, 'Available', '2026-04-12', 'Battery replaced', 1);
 
 INSERT INTO packages (package_name, description, equipment_ids, equipment_summary, price, availability_status, approval_status, submitted_by, approved_by)
 VALUES

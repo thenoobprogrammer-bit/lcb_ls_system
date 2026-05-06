@@ -75,7 +75,7 @@ require BASE_PATH . '/partials/layout_top.php';
                         <tr>
                             <td><?= e($event['event_name']) ?><div class="small text-muted"><?= e($event['event_type']) ?></div></td>
                             <td><?= e($event['customer_name']) ?></td>
-                            <td><?= e($event['event_date']) ?><div class="small text-muted"><?= e(substr($event['start_time'], 0, 5)) ?> - <?= e(substr($event['end_time'], 0, 5)) ?></div></td>
+                            <td><?= e(format_display_date($event['event_date'])) ?><div class="small text-muted"><?= e(format_display_time($event['start_time'])) ?> - <?= e(format_display_time($event['end_time'])) ?></div></td>
                             <td><?= e($event['package_name'] ?? 'Custom') ?></td>
                             <td><?= e($event['assigned_employees'] ?: 'Not set') ?></td>
                         </tr>
@@ -102,7 +102,7 @@ require BASE_PATH . '/partials/layout_top.php';
                     <tbody>
                     <?php foreach ($myPayroll as $row): ?>
                         <tr>
-                            <td><?= e($row['payroll_period_start']) ?> to <?= e($row['payroll_period_end']) ?></td>
+                            <td><?= e(format_display_date($row['payroll_period_start'])) ?> to <?= e(format_display_date($row['payroll_period_end'])) ?></td>
                             <td><?= e(money((float) $row['basic_salary'])) ?></td>
                             <td><?= e(money((float) $row['allowance'])) ?></td>
                             <td><?= e(money((float) $row['deductions'])) ?></td>
