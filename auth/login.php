@@ -32,9 +32,9 @@ require BASE_PATH . '/partials/layout_top.php';
     <div class="auth-card row g-0">
         <div class="col-lg-5 auth-side d-flex flex-column justify-content-between">
             <div>
-                <div class="hero-badge">LCB LIGHTS AND SOUND</div>
-                <h2 class="display-6 fw-bold">Rental operations, inventory, payroll, and event tracking.</h2>
-                <p class="mt-3 text-white-50">Administrator, employee, and rental user accounts share the same platform with isolated access rules.</p>
+                <div class="hero-badge">Larry R. Bajet</div>
+                <h2 class="display-6 fw-bold">LCB LIGHTS AND SOUND</h2>
+                <p class="mt-3 text-white-50">Rental operations, inventory, and event tracking.</p>
             </div>
             <div>
                 <div class="small text-white-50">Default accounts after SQL import</div>
@@ -57,7 +57,7 @@ require BASE_PATH . '/partials/layout_top.php';
                 </div>
                 <div class="col-12 d-flex gap-2">
                     <button type="submit" class="btn btn-primary">Login</button>
-                    <a href="<?= e(app_url('auth/register.php')) ?>" class="btn btn-outline-primary">Rental User Registration</a>
+                    
                 </div>
             </form>
         </div>

@@ -294,6 +294,54 @@ body {
     margin-bottom: 16px;
 }
 
+.calendar-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.calendar-subtitle {
+    font-size: 0.92rem;
+}
+
+.calendar-controls {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    width: min(100%, 420px);
+}
+
+.calendar-controls .form-select {
+    min-width: 0;
+}
+
+.calendar-controls .btn {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.calendar-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.calendar-weekday {
+    text-align: center;
+    font-size: 0.76rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+}
+
 .calendar-grid {
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -351,6 +399,21 @@ body {
 
 .calendar-more {
     color: var(--muted);
+}
+
+@media (max-width: 767.98px) {
+    .calendar-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .calendar-controls {
+        width: 100%;
+    }
+
+    .calendar-controls .form-select {
+        min-width: 0;
+    }
 }
 
 .calendar-modal-item {

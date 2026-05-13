@@ -14,11 +14,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         $id = post_int('id');
         $action = post_string('action');
-        if (in_array($action, ['approve', 'deny', 'complete'], true)) {
+        if (in_array($action, ['approve', 'deny'], true)) {
             $status = match ($action) {
                 'approve' => 'Approved',
                 'deny' => 'Denied',
-                default => 'Completed',
             };
             $stmt = db()->prepare('UPDATE events SET event_status = ? WHERE id = ?');
             $stmt->bind_param('si', $status, $id);
@@ -30,6 +29,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             log_activity($userId, ucfirst($action) . ' Event', 'Events', "Changed event ID {$id} to {$status}.");
             set_flash('success', "Event {$status}.");
         }
+        if ($action === 'complete') {
+            $event = fetch_event_payment_summary($id);
+            if (!$event) {
+                throw new RuntimeException('Event not found.');
+            }
+            if (($event['event_status'] ?? 'Approved') !== 'Approved') {
+                throw new RuntimeException('Only approved events can be marked as complete.');
+            }
+
+            $isOvertime = post_string('is_overtime') === '1';
+            $overtimeHours = $isOvertime ? post_float('overtime_hours') : 0;
+            $overtimeFeePercentage = $isOvertime ? post_float('overtime_fee_percentage') : 0;
+            if ($isOvertime && $overtimeHours <= 0) {
+                throw new RuntimeException('Enter the overtime hours before completing the event.');
+            }
+            if ($isOvertime && $overtimeFeePercentage <= 0) {
+                throw new RuntimeException('Enter the overtime fee percentage before completing the event.');
+            }
+
+            $packagePrice = (float) ($event['package_price'] ?? 0);
+            $overtimeFeeAmount = $isOvertime ? calculate_overtime_fee($packagePrice, $overtimeHours, $overtimeFeePercentage) : 0;
+            $totalCost = $packagePrice + $overtimeFeeAmount;
+
+            db()->begin_transaction();
+            $startedTransaction = true;
+
+            $status = 'Completed';
+            $overtimeFlag = $isOvertime ? 1 : 0;
+            $stmt = db()->prepare('UPDATE events SET event_status = ?, is_overtime = ?, overtime_hours = ?, overtime_fee_percentage = ?, overtime_fee_amount = ? WHERE id = ?');
+            $stmt->bind_param('sidddi', $status, $overtimeFlag, $overtimeHours, $overtimeFeePercentage, $overtimeFeeAmount, $id);
+            $stmt->execute();
+
+            sync_payments_for_event_total($id, $totalCost);
+
+            create_notification((int) $event['rental_user_id'], 'Event status updated', "{$event['event_name']} is now {$status}.");
+            db()->commit();
+            $startedTransaction = false;
+
+            log_activity($userId, 'Complete Event', 'Events', "Completed event ID {$id} with overtime fee of {$overtimeFeeAmount}.");
+            set_flash('success', 'Event completed and payment totals updated.');
+        }
         if ($action === 'create') {
             $selectedEmployees = array_map('intval', post_array('employee_ids'));
             $packageId = post_int('package_id');
@@ -40,10 +80,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $package = fetch_one('SELECT * FROM packages WHERE id = ?', 'i', [$packageId]);
             if (!$package) {
                 throw new RuntimeException('Selected package was not found.');
-            }
-            $packageItems = decode_package_items($package['package_items_json'] ?? null, $package['equipment_ids'] ?? null);
-            if (!package_items_available($packageItems)) {
-                throw new RuntimeException('Selected package is not currently available.');
             }
             $eventDate = post_string('event_date');
             $startTime = post_string('start_time');
@@ -121,7 +157,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 $events = fetch_all('
-    SELECT e.*, p.package_name, u.full_name AS customer_name,
+    SELECT e.*, p.package_name, COALESCE(p.price, 0) AS package_price, u.full_name AS customer_name,
            GROUP_CONCAT(DISTINCT crew.full_name ORDER BY crew.full_name SEPARATOR ", ") AS assigned_employees
     FROM events e
     LEFT JOIN packages p ON p.id = e.package_id
@@ -152,16 +188,26 @@ require BASE_PATH . '/partials/layout_top.php';
                 <tr>
                     <td><div class="fw-semibold"><?= e($event['event_name']) ?></div><div class="small text-muted"><?= e($event['event_type']) ?></div></td>
                     <td><?= e($event['customer_name']) ?><div class="small text-muted"><?= e($event['contact_number']) ?></div></td>
-                    <td><?= e($event['package_name'] ?? 'Custom') ?></td>
+                    <td>
+                        <?= e($event['package_name'] ?? 'Custom') ?>
+                        <div class="small text-muted"><?= e(money((float) ($event['package_price'] ?? 0))) ?></div>
+                    </td>
                     <td><?= e(format_display_date($event['event_date'])) ?><div class="small text-muted"><?= e(format_display_time($event['start_time'])) ?> - <?= e(format_display_time($event['end_time'])) ?></div></td>
-                    <td><span class="status-pill status-<?= strtolower($event['event_status']) ?>"><?= e($event['event_status']) ?></span></td>
+                    <td>
+                        <span class="status-pill status-<?= strtolower($event['event_status']) ?>"><?= e($event['event_status']) ?></span>
+                        <?php if ((int) ($event['is_overtime'] ?? 0) === 1): ?>
+                            <div class="small text-muted mt-1">
+                                Overtime: <?= e((string) $event['overtime_hours']) ?> hr(s) at <?= e((string) $event['overtime_fee_percentage']) ?>% = <?= e(money((float) $event['overtime_fee_amount'])) ?>
+                            </div>
+                        <?php endif; ?>
+                    </td>
                     <td><?= e($event['assigned_employees'] ?: 'No crew assigned') ?></td>
                     <td><?= $event['attachment_filename'] ? '<a href="' . e(app_url('uploads/events/' . $event['attachment_filename'])) . '" target="_blank">Open</a>' : 'None' ?></td>
                     <td class="d-flex gap-2 flex-wrap">
                         <?php if ($event['event_status'] !== 'Approved'): ?><form method="post"><input type="hidden" name="action" value="approve"><input type="hidden" name="id" value="<?= (int) $event['id'] ?>"><button class="btn btn-sm btn-outline-success">Approve</button></form><?php endif; ?>
                         <?php if ($event['event_status'] !== 'Denied'): ?><form method="post"><input type="hidden" name="action" value="deny"><input type="hidden" name="id" value="<?= (int) $event['id'] ?>"><button class="btn btn-sm btn-outline-danger">Deny</button></form><?php endif; ?>
                         <?php if ($event['event_status'] === 'Approved'): ?><button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#assignCrew<?= (int) $event['id'] ?>">Assign Crew</button><?php endif; ?>
-                        <?php if ($event['event_status'] === 'Approved'): ?><form method="post"><input type="hidden" name="action" value="complete"><input type="hidden" name="id" value="<?= (int) $event['id'] ?>"><button class="btn btn-sm btn-outline-primary">Complete</button></form><?php endif; ?>
+                        <?php if ($event['event_status'] === 'Approved'): ?><button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#completeEvent<?= (int) $event['id'] ?>">Complete</button><?php endif; ?>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -234,4 +280,64 @@ require BASE_PATH . '/partials/layout_top.php';
     </form></div></div>
 </div>
 <?php endforeach; ?>
+
+<?php foreach ($events as $event):
+    if ($event['event_status'] !== 'Approved') {
+        continue;
+    }
+?>
+<div class="modal fade" id="completeEvent<?= (int) $event['id'] ?>" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content"><form method="post" class="complete-event-form">
+        <input type="hidden" name="action" value="complete">
+        <input type="hidden" name="id" value="<?= (int) $event['id'] ?>">
+        <div class="modal-header"><h5 class="modal-title">Complete <?= e($event['event_name']) ?></h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div class="mb-3">
+                <div class="fw-semibold">Package price: <?= e(money((float) ($event['package_price'] ?? 0))) ?></div>
+                <div class="small text-muted">If there was overtime, the additional fee is computed as the selected percentage of the total package price for every overtime hour.</div>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Was the event overtime?</label>
+                <select class="form-select overtime-toggle" name="is_overtime">
+                    <option value="0">No</option>
+                    <option value="1">Yes</option>
+                </select>
+            </div>
+            <div class="overtime-fields d-none">
+                <div class="mb-3">
+                    <label class="form-label">Overtime Hours</label>
+                    <input type="number" min="0" step="0.25" name="overtime_hours" class="form-control" value="0">
+                </div>
+                <div>
+                    <label class="form-label">Additional Fee Percentage Per Hour</label>
+                    <input type="number" min="0" step="0.01" name="overtime_fee_percentage" class="form-control" value="0">
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button><button class="btn btn-primary">Save Completion</button></div>
+    </form></div></div>
+</div>
+<?php endforeach; ?>
+<script>
+document.querySelectorAll('.complete-event-form').forEach((form) => {
+    const toggle = form.querySelector('.overtime-toggle');
+    const overtimeFields = form.querySelector('.overtime-fields');
+    const hoursInput = form.querySelector('input[name="overtime_hours"]');
+    const percentageInput = form.querySelector('input[name="overtime_fee_percentage"]');
+
+    const syncOvertimeFields = () => {
+        const isOvertime = toggle.value === '1';
+        overtimeFields.classList.toggle('d-none', !isOvertime);
+        hoursInput.required = isOvertime;
+        percentageInput.required = isOvertime;
+        if (!isOvertime) {
+            hoursInput.value = '0';
+            percentageInput.value = '0';
+        }
+    };
+
+    toggle.addEventListener('change', syncOvertimeFields);
+    syncOvertimeFields();
+});
+</script>
 <?php require BASE_PATH . '/partials/layout_bottom.php'; ?>

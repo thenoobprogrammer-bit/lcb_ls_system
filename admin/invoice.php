@@ -6,7 +6,10 @@ require_auth([ACCOUNT_ADMIN]);
 
 $id = (int) ($_GET['id'] ?? 0);
 $payment = fetch_one('
-    SELECT pay.*, e.event_name, e.event_type, e.event_date, e.address, e.full_name, e.contact_number, p.package_name, p.equipment_summary
+    SELECT pay.*, e.event_name, e.event_type, e.event_date, e.address, e.full_name, e.contact_number,
+           COALESCE(e.is_overtime, 0) AS is_overtime, COALESCE(e.overtime_hours, 0) AS overtime_hours,
+           COALESCE(e.overtime_fee_percentage, 0) AS overtime_fee_percentage, COALESCE(e.overtime_fee_amount, 0) AS overtime_fee_amount,
+           p.package_name, p.equipment_summary
     FROM payments pay
     JOIN events e ON e.id = pay.event_id
     LEFT JOIN packages p ON p.id = e.package_id
@@ -16,6 +19,7 @@ $payment = fetch_one('
 if (!$payment) {
     exit('Invoice not found.');
 }
+
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -57,6 +61,9 @@ if (!$payment) {
                     <thead><tr><th>Description</th><th class="text-end">Amount</th></tr></thead>
                     <tbody>
                         <tr><td>Package / Event Cost</td><td class="text-end"><?= e(money((float) $payment['total_cost'])) ?></td></tr>
+                        <?php if ((int) ($payment['is_overtime'] ?? 0) === 1): ?>
+                            <tr><td>Overtime Fee (<?= e((string) $payment['overtime_hours']) ?> hr(s) at <?= e((string) $payment['overtime_fee_percentage']) ?>%)</td><td class="text-end"><?= e(money((float) $payment['overtime_fee_amount'])) ?></td></tr>
+                        <?php endif; ?>
                         <tr><td>Downpayment</td><td class="text-end"><?= e(money((float) $payment['downpayment'])) ?></td></tr>
                         <tr><td>Amount Paid</td><td class="text-end"><?= e(money((float) $payment['amount_paid'])) ?></td></tr>
                         <tr><td>Remaining Balance</td><td class="text-end"><?= e(money((float) $payment['remaining_balance'])) ?></td></tr>

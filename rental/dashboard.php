@@ -27,6 +27,19 @@ require BASE_PATH . '/partials/layout_top.php';
         </div>
     <?php endforeach; ?>
     <div class="col-12">
+        <div class="calendar-card" data-calendar data-events='<?= e(json_encode(array_map(static fn ($row): array => [
+            'event_name' => $row['event_name'],
+            'event_date' => $row['event_date'],
+            'event_type' => $row['event_type'],
+            'start_time' => $row['start_time'],
+            'end_time' => $row['end_time'],
+            'event_status' => $row['event_status'],
+            'package_name' => $row['package_name'],
+            'full_name' => $row['full_name'],
+            'address' => $row['address'],
+        ], $upcomingEvents))) ?>'></div>
+    </div>
+    <div class="col-12">
         <div class="content-card">
             <div class="section-title mb-3">My Event Requests</div>
             <div class="table-responsive">

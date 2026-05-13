@@ -8,7 +8,7 @@ $menus = [
         ['Inventory', 'admin/inventory.php', 'bi-box-seam'],
         ['Categories', 'categories.php', 'bi-tags'],
         //['Employees', 'admin/employees.php', 'bi-people'],
-        ['Payroll', 'admin/payroll.php', 'bi-cash-stack'],
+        //['Payroll', 'admin/payroll.php', 'bi-cash-stack'],
         ['Packages', 'admin/packages.php', 'bi-collection'],
         ['Events', 'admin/events.php', 'bi-calendar-event'],
         ['Payments', 'admin/payments.php', 'bi-wallet2'],

@@ -17,8 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $packageId = post_int('package_id');
             $package = fetch_one('SELECT * FROM packages WHERE id = ?', 'i', [$packageId]);
-            $packageItems = $package ? decode_package_items($package['package_items_json'] ?? null, $package['equipment_ids'] ?? null) : [];
-            if (!$package || !package_items_available($packageItems)) {
+            if (!$package) {
                 throw new RuntimeException('Selected package is not currently available.');
             }
             if (event_has_conflict($packageId, post_string('event_date'), post_string('start_time'), post_string('end_time'))) {

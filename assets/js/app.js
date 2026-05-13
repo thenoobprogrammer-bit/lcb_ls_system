@@ -9,6 +9,9 @@ $(function () {
 
     $('[data-calendar]').each(function () {
         const events = JSON.parse(this.dataset.events || '[]');
+        const now = new Date();
+        this.dataset.calendarMonth = String(now.getMonth());
+        this.dataset.calendarYear = String(now.getFullYear());
         renderCalendar(this, events);
     });
 
@@ -36,9 +39,21 @@ $(function () {
 });
 
 function renderCalendar(container, events) {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const eventDates = events
+        .map((event) => new Date(`${event.event_date}T00:00:00`))
+        .filter((date) => !Number.isNaN(date.getTime()));
+    const fallbackDate = new Date();
+    const minYear = eventDates.length ? Math.min(...eventDates.map((date) => date.getFullYear())) : fallbackDate.getFullYear() - 2;
+    const maxYear = eventDates.length ? Math.max(...eventDates.map((date) => date.getFullYear())) : fallbackDate.getFullYear() + 2;
+    const yearOptions = [];
+    for (let yearOption = minYear - 1; yearOption <= maxYear + 1; yearOption++) {
+        yearOptions.push(yearOption);
+    }
+
+    const month = Number(container.dataset.calendarMonth ?? fallbackDate.getMonth());
+    const year = Number(container.dataset.calendarYear ?? fallbackDate.getFullYear());
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     const eventMap = {};
@@ -48,9 +63,23 @@ function renderCalendar(container, events) {
         eventMap[event.event_date].push(event);
     });
 
-    let html = '<div class="d-flex justify-content-between mb-3"><h5 class="mb-0">Booking Calendar</h5><span class="text-muted">' +
-        now.toLocaleString('en-US', { month: 'long', year: 'numeric' }) +
-        '</span></div>';
+    let html = `<div class="calendar-toolbar mb-3">
+        <div>
+            <h5 class="mb-0">Booking Calendar</h5>
+            <div class="text-muted calendar-subtitle">${monthNames[month]} ${year}</div>
+        </div>
+        <div class="calendar-controls">
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-calendar-nav="prev">&lsaquo;</button>
+            <select class="form-select form-select-sm" data-calendar-select="month">
+                ${monthNames.map((name, index) => `<option value="${index}" ${index === month ? 'selected' : ''}>${name}</option>`).join('')}
+            </select>
+            <select class="form-select form-select-sm" data-calendar-select="year">
+                ${yearOptions.map((option) => `<option value="${option}" ${option === year ? 'selected' : ''}>${option}</option>`).join('')}
+            </select>
+            <button type="button" class="btn btn-outline-secondary btn-sm" data-calendar-nav="next">&rsaquo;</button>
+        </div>
+    </div>`;
+    html += `<div class="calendar-weekdays">${dayNames.map((dayName) => `<div class="calendar-weekday">${dayName}</div>`).join('')}</div>`;
     html += '<div class="calendar-grid">';
 
     for (let i = 0; i < firstDay.getDay(); i++) {
@@ -72,6 +101,36 @@ function renderCalendar(container, events) {
 
     container.querySelectorAll('[data-calendar-date]').forEach((cell) => {
         cell.addEventListener('click', () => openCalendarEventsModal(cell.dataset.calendarDate, eventMap[cell.dataset.calendarDate] || []));
+    });
+
+    container.querySelector('[data-calendar-nav="prev"]')?.addEventListener('click', () => {
+        const currentMonth = Number(container.dataset.calendarMonth);
+        const currentYear = Number(container.dataset.calendarYear);
+        const previousMonth = currentMonth === 0 ? 11 : currentMonth - 1;
+        const previousYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+        container.dataset.calendarMonth = String(previousMonth);
+        container.dataset.calendarYear = String(previousYear);
+        renderCalendar(container, events);
+    });
+
+    container.querySelector('[data-calendar-nav="next"]')?.addEventListener('click', () => {
+        const currentMonth = Number(container.dataset.calendarMonth);
+        const currentYear = Number(container.dataset.calendarYear);
+        const nextMonth = currentMonth === 11 ? 0 : currentMonth + 1;
+        const nextYear = currentMonth === 11 ? currentYear + 1 : currentYear;
+        container.dataset.calendarMonth = String(nextMonth);
+        container.dataset.calendarYear = String(nextYear);
+        renderCalendar(container, events);
+    });
+
+    container.querySelector('[data-calendar-select="month"]')?.addEventListener('change', (event) => {
+        container.dataset.calendarMonth = event.target.value;
+        renderCalendar(container, events);
+    });
+
+    container.querySelector('[data-calendar-select="year"]')?.addEventListener('change', (event) => {
+        container.dataset.calendarYear = event.target.value;
+        renderCalendar(container, events);
     });
 }
 

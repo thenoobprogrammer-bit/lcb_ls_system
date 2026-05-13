@@ -11,11 +11,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = post_string('action');
         if (in_array($action, ['add', 'edit'], true)) {
             $eventId = post_int('event_id');
-            $totalCost = post_float('total_cost');
+            $eventSummary = fetch_event_payment_summary($eventId);
+            if (!$eventSummary) {
+                throw new RuntimeException('Selected event was not found.');
+            }
+
+            $totalCost = (float) ($eventSummary['total_cost'] ?? 0);
             $downpayment = post_float('downpayment');
             $amountPaid = post_float('amount_paid');
-            $remainingBalance = max($totalCost - $amountPaid, 0);
-            $paymentStatus = $remainingBalance <= 0 ? 'Paid' : ($amountPaid > 0 ? 'Partial' : 'Pending');
+            if ($amountPaid < $downpayment) {
+                throw new RuntimeException('Amount paid cannot be less than the downpayment.');
+            }
+            $remainingBalance = payment_remaining_balance($totalCost, $downpayment, $amountPaid);
+            $paymentStatus = payment_status_from_values($totalCost, $downpayment, $amountPaid);
             if ($action === 'add') {
                 $invoiceNumber = 'INV-' . date('Y') . '-' . str_pad((string) random_int(1, 9999), 4, '0', STR_PAD_LEFT);
                 $stmt = db()->prepare('INSERT INTO payments (event_id, total_cost, downpayment, amount_paid, remaining_balance, payment_status, invoice_number) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -39,8 +47,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     redirect('admin/payments.php');
 }
 
-$events = fetch_all('SELECT e.id, e.event_name, p.package_name FROM events e LEFT JOIN packages p ON p.id = e.package_id ORDER BY e.event_date DESC');
-$payments = fetch_all('SELECT pay.*, e.event_name, p.package_name FROM payments pay JOIN events e ON e.id = pay.event_id LEFT JOIN packages p ON p.id = e.package_id ORDER BY pay.created_at DESC');
+$events = fetch_all('
+    SELECT e.id, e.event_name, e.event_status, p.package_name, COALESCE(p.price, 0) AS package_price,
+           COALESCE(e.is_overtime, 0) AS is_overtime, COALESCE(e.overtime_hours, 0) AS overtime_hours,
+           COALESCE(e.overtime_fee_percentage, 0) AS overtime_fee_percentage, COALESCE(e.overtime_fee_amount, 0) AS overtime_fee_amount
+    FROM events e
+    LEFT JOIN packages p ON p.id = e.package_id
+    ORDER BY e.event_date DESC
+');
+$payments = fetch_all('
+    SELECT pay.*, e.event_name, p.package_name, COALESCE(p.price, 0) AS package_price,
+           COALESCE(e.is_overtime, 0) AS is_overtime, COALESCE(e.overtime_hours, 0) AS overtime_hours,
+           COALESCE(e.overtime_fee_percentage, 0) AS overtime_fee_percentage, COALESCE(e.overtime_fee_amount, 0) AS overtime_fee_amount
+    FROM payments pay
+    JOIN events e ON e.id = pay.event_id
+    LEFT JOIN packages p ON p.id = e.package_id
+    ORDER BY pay.created_at DESC
+');
 $pageTitle = 'Payments';
 $pageKey = 'admin-payments';
 require BASE_PATH . '/partials/layout_top.php';
@@ -57,9 +80,21 @@ require BASE_PATH . '/partials/layout_top.php';
             <?php foreach ($payments as $payment): ?>
                 <tr>
                     <td><?= e($payment['invoice_number']) ?></td>
-                    <td><?= e($payment['event_name']) ?><div class="small text-muted"><?= e($payment['package_name'] ?? '-') ?></div></td>
-                    <td><?= e(money((float) $payment['total_cost'])) ?></td>
-                    <td><?= e(money((float) $payment['amount_paid'])) ?></td>
+                    <td>
+                        <?= e($payment['event_name']) ?>
+                        <div class="small text-muted"><?= e($payment['package_name'] ?? '-') ?></div>
+                        <?php if ((int) ($payment['is_overtime'] ?? 0) === 1): ?>
+                            <div class="small text-muted">Overtime: <?= e((string) $payment['overtime_hours']) ?> hr(s) at <?= e((string) $payment['overtime_fee_percentage']) ?>%</div>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?= e(money((float) $payment['total_cost'])) ?>
+                        <div class="small text-muted">Base <?= e(money((float) ($payment['package_price'] ?? 0))) ?><?php if ((float) ($payment['overtime_fee_amount'] ?? 0) > 0): ?> + OT <?= e(money((float) $payment['overtime_fee_amount'])) ?><?php endif; ?></div>
+                    </td>
+                    <td>
+                        <?= e(money((float) $payment['amount_paid'])) ?>
+                        <div class="small text-muted">Downpayment <?= e(money((float) $payment['downpayment'])) ?> minimum paid amount</div>
+                    </td>
                     <td><?= e(money((float) $payment['remaining_balance'])) ?></td>
                     <td><span class="status-pill status-<?= strtolower($payment['payment_status']) ?>"><?= e($payment['payment_status']) ?></span></td>
                     <td class="d-flex gap-2">
@@ -78,10 +113,14 @@ require BASE_PATH . '/partials/layout_top.php';
         <input type="hidden" name="action" value="add">
         <div class="modal-header"><h5 class="modal-title">Add Payment Record</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body row g-3">
-            <div class="col-md-6"><label class="form-label">Event</label><select class="form-select" name="event_id"><?php foreach ($events as $event): ?><option value="<?= (int) $event['id'] ?>"><?= e($event['event_name']) ?><?= $event['package_name'] ? ' - ' . e($event['package_name']) : '' ?></option><?php endforeach; ?></select></div>
-            <div class="col-md-3"><label class="form-label">Total Cost</label><input type="number" step="0.01" name="total_cost" class="form-control" required></div>
-            <div class="col-md-3"><label class="form-label">Downpayment</label><input type="number" step="0.01" name="downpayment" class="form-control" value="0"></div>
-            <div class="col-md-6"><label class="form-label">Amount Paid</label><input type="number" step="0.01" name="amount_paid" class="form-control" value="0"></div>
+            <div class="col-md-6"><label class="form-label">Event</label><select class="form-select payment-event-select" name="event_id"><?php foreach ($events as $event): $eventTotal = (float) $event['package_price'] + ((int) ($event['is_overtime'] ?? 0) === 1 ? (float) $event['overtime_fee_amount'] : 0); ?><option value="<?= (int) $event['id'] ?>" data-total-cost="<?= e(number_format($eventTotal, 2, '.', '')) ?>" data-package-price="<?= e(number_format((float) $event['package_price'], 2, '.', '')) ?>" data-overtime-fee="<?= e(number_format((float) $event['overtime_fee_amount'], 2, '.', '')) ?>"><?= e($event['event_name']) ?><?= $event['package_name'] ? ' - ' . e($event['package_name']) : '' ?></option><?php endforeach; ?></select></div>
+            <div class="col-md-3"><label class="form-label">Total Cost</label><input type="number" step="0.01" name="total_cost" class="form-control payment-total-cost" readonly></div>
+            <div class="col-md-3"><label class="form-label">Downpayment</label><input type="number" min="0" step="0.01" name="downpayment" class="form-control payment-downpayment" value="0"></div>
+            <div class="col-md-6"><label class="form-label">Amount Paid</label><input type="number" min="0" step="0.01" name="amount_paid" class="form-control payment-amount-paid" value="0"></div>
+            <div class="col-12">
+                <div class="small text-muted payment-cost-note"></div>
+                <div class="small text-danger payment-validation-message d-none">Amount paid cannot be less than the downpayment.</div>
+            </div>
         </div>
         <div class="modal-footer"><button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Close</button><button class="btn btn-primary">Save Payment</button></div>
     </form></div></div>
@@ -93,14 +132,58 @@ require BASE_PATH . '/partials/layout_top.php';
         <input type="hidden" name="action" value="edit"><input type="hidden" name="id" value="<?= (int) $payment['id'] ?>">
         <div class="modal-header"><h5 class="modal-title">Edit Payment</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body row g-3">
-            <div class="col-md-6"><label class="form-label">Event</label><select class="form-select" name="event_id"><?php foreach ($events as $event): ?><option value="<?= (int) $event['id'] ?>" <?= (int) $event['id'] === (int) $payment['event_id'] ? 'selected' : '' ?>><?= e($event['event_name']) ?></option><?php endforeach; ?></select></div>
-            <div class="col-md-3"><label class="form-label">Total Cost</label><input type="number" step="0.01" name="total_cost" class="form-control" value="<?= e($payment['total_cost']) ?>" required></div>
-            <div class="col-md-3"><label class="form-label">Downpayment</label><input type="number" step="0.01" name="downpayment" class="form-control" value="<?= e($payment['downpayment']) ?>"></div>
-            <div class="col-md-6"><label class="form-label">Amount Paid</label><input type="number" step="0.01" name="amount_paid" class="form-control" value="<?= e($payment['amount_paid']) ?>"></div>
+            <div class="col-md-6"><label class="form-label">Event</label><select class="form-select payment-event-select" name="event_id"><?php foreach ($events as $event): $eventTotal = (float) $event['package_price'] + ((int) ($event['is_overtime'] ?? 0) === 1 ? (float) $event['overtime_fee_amount'] : 0); ?><option value="<?= (int) $event['id'] ?>" data-total-cost="<?= e(number_format($eventTotal, 2, '.', '')) ?>" data-package-price="<?= e(number_format((float) $event['package_price'], 2, '.', '')) ?>" data-overtime-fee="<?= e(number_format((float) $event['overtime_fee_amount'], 2, '.', '')) ?>" <?= (int) $event['id'] === (int) $payment['event_id'] ? 'selected' : '' ?>><?= e($event['event_name']) ?></option><?php endforeach; ?></select></div>
+            <div class="col-md-3"><label class="form-label">Total Cost</label><input type="number" step="0.01" name="total_cost" class="form-control payment-total-cost" value="<?= e($payment['total_cost']) ?>" readonly></div>
+            <div class="col-md-3"><label class="form-label">Downpayment</label><input type="number" min="0" step="0.01" name="downpayment" class="form-control payment-downpayment" value="<?= e($payment['downpayment']) ?>"></div>
+            <div class="col-md-6"><label class="form-label">Amount Paid</label><input type="number" min="0" step="0.01" name="amount_paid" class="form-control payment-amount-paid" value="<?= e($payment['amount_paid']) ?>"></div>
+            <div class="col-12">
+                <div class="small text-muted payment-cost-note"></div>
+                <div class="small text-danger payment-validation-message d-none">Amount paid cannot be less than the downpayment.</div>
+            </div>
         </div>
         <div class="modal-footer"><button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Close</button><button class="btn btn-primary">Update Payment</button></div>
     </form></div></div>
 </div>
 <?php endforeach; ?>
-<?php require BASE_PATH . '/partials/layout_bottom.php'; ?>
+<script>
+document.querySelectorAll('form').forEach((form) => {
+    const eventSelect = form.querySelector('.payment-event-select');
+    const totalCostInput = form.querySelector('.payment-total-cost');
+    const costNote = form.querySelector('.payment-cost-note');
+    const downpaymentInput = form.querySelector('.payment-downpayment');
+    const amountPaidInput = form.querySelector('.payment-amount-paid');
+    const validationMessage = form.querySelector('.payment-validation-message');
+    if (!eventSelect || !totalCostInput || !costNote || !downpaymentInput || !amountPaidInput || !validationMessage) {
+        return;
+    }
 
+    const syncPaymentEventCost = () => {
+        const selectedOption = eventSelect.options[eventSelect.selectedIndex];
+        const totalCost = selectedOption?.dataset.totalCost || '0.00';
+        const packagePrice = selectedOption?.dataset.packagePrice || '0.00';
+        const overtimeFee = selectedOption?.dataset.overtimeFee || '0.00';
+
+        totalCostInput.value = totalCost;
+        costNote.textContent = Number(overtimeFee) > 0
+            ? `Base package price: PHP ${Number(packagePrice).toFixed(2)} | Overtime fee: PHP ${Number(overtimeFee).toFixed(2)}`
+            : `Base package price: PHP ${Number(packagePrice).toFixed(2)} | No overtime fee`;
+    };
+
+    const validateAmountPaid = () => {
+        const downpayment = Number(downpaymentInput.value || 0);
+        const amountPaid = amountPaidInput.value === '' ? NaN : Number(amountPaidInput.value);
+        const isInvalid = !Number.isNaN(amountPaid) && amountPaid < downpayment;
+
+        amountPaidInput.min = '0';
+        amountPaidInput.setCustomValidity(isInvalid ? 'Amount paid cannot be less than the downpayment.' : '');
+        validationMessage.classList.toggle('d-none', !isInvalid);
+    };
+
+    eventSelect.addEventListener('change', syncPaymentEventCost);
+    downpaymentInput.addEventListener('input', validateAmountPaid);
+    amountPaidInput.addEventListener('input', validateAmountPaid);
+    syncPaymentEventCost();
+    validateAmountPaid();
+});
+</script>
+<?php require BASE_PATH . '/partials/layout_bottom.php'; ?>

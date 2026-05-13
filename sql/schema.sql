@@ -92,6 +92,10 @@ CREATE TABLE events (
     notes TEXT NULL,
     attachment_filename VARCHAR(255) NULL,
     event_status ENUM('Pending', 'Approved', 'Denied', 'Completed') NOT NULL DEFAULT 'Pending',
+    is_overtime TINYINT(1) NOT NULL DEFAULT 0,
+    overtime_hours DECIMAL(10,2) NOT NULL DEFAULT 0,
+    overtime_fee_percentage DECIMAL(5,2) NOT NULL DEFAULT 0,
+    overtime_fee_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (rental_user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (package_id) REFERENCES packages(id) ON DELETE SET NULL

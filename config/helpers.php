@@ -220,6 +220,92 @@ function money(float $value): string
     return 'PHP ' . number_format($value, 2);
 }
 
+function payment_total_received(float $downpayment, float $amountPaid): float
+{
+    return max(max($downpayment, 0), max($amountPaid, 0));
+}
+
+function payment_remaining_balance(float $totalCost, float $downpayment, float $amountPaid): float
+{
+    return max($totalCost - payment_total_received($downpayment, $amountPaid), 0);
+}
+
+function payment_status_from_values(float $totalCost, float $downpayment, float $amountPaid): string
+{
+    $totalReceived = payment_total_received($downpayment, $amountPaid);
+    if ($totalCost <= 0 || $totalReceived <= 0) {
+        return 'Pending';
+    }
+
+    return payment_remaining_balance($totalCost, $downpayment, $amountPaid) <= 0 ? 'Paid' : 'Partial';
+}
+
+function calculate_overtime_fee(float $packagePrice, float $hours, float $percentage): float
+{
+    if ($packagePrice <= 0 || $hours <= 0 || $percentage <= 0) {
+        return 0;
+    }
+
+    return ($packagePrice * ($percentage / 100)) * $hours;
+}
+
+function fetch_event_payment_summary(int $eventId): ?array
+{
+    $event = fetch_one(
+        'SELECT e.id, e.rental_user_id, e.event_name, e.event_status, e.package_id, p.package_name, COALESCE(p.price, 0) AS package_price,
+                COALESCE(e.is_overtime, 0) AS is_overtime, COALESCE(e.overtime_hours, 0) AS overtime_hours,
+                COALESCE(e.overtime_fee_percentage, 0) AS overtime_fee_percentage,
+                COALESCE(e.overtime_fee_amount, 0) AS overtime_fee_amount
+         FROM events e
+         LEFT JOIN packages p ON p.id = e.package_id
+         WHERE e.id = ?
+         LIMIT 1',
+        'i',
+        [$eventId]
+    );
+
+    if (!$event) {
+        return null;
+    }
+
+    $packagePrice = (float) ($event['package_price'] ?? 0);
+    $overtimeHours = (float) ($event['overtime_hours'] ?? 0);
+    $overtimeFeePercentage = (float) ($event['overtime_fee_percentage'] ?? 0);
+    $storedOvertimeFeeAmount = (float) ($event['overtime_fee_amount'] ?? 0);
+    $isOvertime = (int) ($event['is_overtime'] ?? 0) === 1;
+    $overtimeFeeAmount = $isOvertime
+        ? ($storedOvertimeFeeAmount > 0 ? $storedOvertimeFeeAmount : calculate_overtime_fee($packagePrice, $overtimeHours, $overtimeFeePercentage))
+        : 0;
+
+    $event['package_price'] = $packagePrice;
+    $event['overtime_hours'] = $overtimeHours;
+    $event['overtime_fee_percentage'] = $overtimeFeePercentage;
+    $event['overtime_fee_amount'] = $overtimeFeeAmount;
+    $event['is_overtime'] = $isOvertime ? 1 : 0;
+    $event['total_cost'] = $packagePrice + $overtimeFeeAmount;
+
+    return $event;
+}
+
+function sync_payments_for_event_total(int $eventId, float $totalCost): void
+{
+    $payments = fetch_all('SELECT id, downpayment, amount_paid FROM payments WHERE event_id = ?', 'i', [$eventId]);
+    if (!$payments) {
+        return;
+    }
+
+    $stmt = db()->prepare('UPDATE payments SET total_cost = ?, remaining_balance = ?, payment_status = ? WHERE id = ?');
+    foreach ($payments as $payment) {
+        $downpayment = (float) ($payment['downpayment'] ?? 0);
+        $amountPaid = (float) ($payment['amount_paid'] ?? 0);
+        $remainingBalance = payment_remaining_balance($totalCost, $downpayment, $amountPaid);
+        $paymentStatus = payment_status_from_values($totalCost, $downpayment, $amountPaid);
+        $paymentId = (int) $payment['id'];
+        $stmt->bind_param('ddsi', $totalCost, $remainingBalance, $paymentStatus, $paymentId);
+        $stmt->execute();
+    }
+}
+
 function format_display_date(?string $value): string
 {
     if (!$value) {
@@ -542,6 +628,23 @@ function ensure_runtime_schema(): void
     }
     if (!isset($packageColumns['package_items_json'])) {
         db()->query('ALTER TABLE packages ADD COLUMN package_items_json LONGTEXT NULL AFTER equipment_ids');
+    }
+
+    $eventColumns = [];
+    foreach (db()->query('SHOW COLUMNS FROM events')->fetch_all(MYSQLI_ASSOC) as $column) {
+        $eventColumns[$column['Field']] = true;
+    }
+    if (!isset($eventColumns['is_overtime'])) {
+        db()->query('ALTER TABLE events ADD COLUMN is_overtime TINYINT(1) NOT NULL DEFAULT 0 AFTER event_status');
+    }
+    if (!isset($eventColumns['overtime_hours'])) {
+        db()->query('ALTER TABLE events ADD COLUMN overtime_hours DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER is_overtime');
+    }
+    if (!isset($eventColumns['overtime_fee_percentage'])) {
+        db()->query('ALTER TABLE events ADD COLUMN overtime_fee_percentage DECIMAL(5,2) NOT NULL DEFAULT 0 AFTER overtime_hours');
+    }
+    if (!isset($eventColumns['overtime_fee_amount'])) {
+        db()->query('ALTER TABLE events ADD COLUMN overtime_fee_amount DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER overtime_fee_percentage');
     }
 }
 
